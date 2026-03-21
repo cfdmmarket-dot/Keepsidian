@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-KEEPSIDIAN - v0.2.1-alpha
+KEEPSIDIAN - v0.2.2-alpha
 Gerenciador de Senhas + Cofre de Conhecimento
 Base: KeePassXC | Inspiração: Obsidian | CFDM AI OS TRIPLEX
+
+CHANGELOG v0.2.2:
+- Menu de contexto para ENTRADAS (botão direito)
+  - Editar, clonar, copiar usuário/senha/URL, mover para grupo, excluir
+- Arrastar e soltar grupos na árvore
+- Mover entradas para qualquer grupo via menu
+- Clonar entradas
 
 CHANGELOG v0.2.1:
 - Menu de contexto completo para GRUPOS (botão direito)
@@ -70,7 +77,7 @@ except ImportError:
     sys.exit(1)
 
 # Versão
-VERSION = "0.2.1-alpha"
+VERSION = "0.2.2-alpha"
 APP_NAME = "Keepsidian"
 
 # Verificar markdown
@@ -3313,6 +3320,13 @@ class KeepsidianWindow(QMainWindow):
         self.groups_tree.itemClicked.connect(self.on_group_selected)
         self.groups_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.groups_tree.customContextMenuRequested.connect(self.show_group_context_menu)
+
+        # Drag & Drop para grupos
+        self.groups_tree.setDragEnabled(True)
+        self.groups_tree.setAcceptDrops(True)
+        self.groups_tree.setDropIndicatorShown(True)
+        self.groups_tree.setDragDropMode(QAbstractItemView.InternalMove)
+
         splitter.addWidget(self.groups_tree)
 
         # Painel central: Entradas
@@ -3326,6 +3340,15 @@ class KeepsidianWindow(QMainWindow):
         self.entries_table.setAlternatingRowColors(True)
         self.entries_table.itemDoubleClicked.connect(self.edit_entry)
         self.entries_table.setMinimumWidth(400)
+
+        # Menu de contexto para entradas
+        self.entries_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.entries_table.customContextMenuRequested.connect(self.show_entry_context_menu)
+
+        # Drag & Drop para entradas
+        self.entries_table.setDragEnabled(True)
+        self.entries_table.setSelectionMode(QAbstractItemView.SingleSelection)
+
         splitter.addWidget(self.entries_table)
 
         # Painel direito: Preview
@@ -3877,6 +3900,99 @@ class KeepsidianWindow(QMainWindow):
         if row >= 0 and row < len(self.entries):
             QApplication.clipboard().setText(self.entries[row].get("password", ""))
             self.status_bar.showMessage("Senha copiada!", 3000)
+
+    def show_entry_context_menu(self, position):
+        """Exibe menu de contexto para entradas"""
+        row = self.entries_table.rowAt(position.y())
+        if row < 0:
+            return
+
+        menu = QMenu()
+
+        # Editar
+        edit_action = menu.addAction("✏️ Editar entrada")
+        edit_action.triggered.connect(self.edit_entry)
+
+        # Clonar
+        clone_action = menu.addAction("📋 Clonar entrada")
+        clone_action.triggered.connect(lambda: self.clone_entry(row))
+
+        menu.addSeparator()
+
+        # Copiar
+        copy_user = menu.addAction("👤 Copiar usuário")
+        copy_user.triggered.connect(self.copy_username)
+
+        copy_pass = menu.addAction("🔑 Copiar senha")
+        copy_pass.triggered.connect(self.copy_password)
+
+        copy_url = menu.addAction("🌐 Copiar URL")
+        copy_url.triggered.connect(lambda: self.copy_entry_url(row))
+
+        menu.addSeparator()
+
+        # Mover para grupo
+        move_menu = menu.addMenu("📦 Mover para grupo...")
+        self._build_entry_move_menu(move_menu, row)
+
+        menu.addSeparator()
+
+        # Excluir
+        delete_action = menu.addAction("🗑️ Excluir entrada")
+        delete_action.triggered.connect(self.delete_entry)
+
+        menu.exec_(self.entries_table.mapToGlobal(position))
+
+    def _build_entry_move_menu(self, menu, entry_row):
+        """Constrói submenu para mover entrada para grupos"""
+        def add_group_items(parent_item, parent_menu, level=0):
+            for i in range(parent_item.childCount()):
+                child = parent_item.child(i)
+                child_text = child.text(0)
+                child_path = child.data(0, Qt.UserRole) or child_text.split(" ", 1)[-1]
+
+                action = parent_menu.addAction("  " * level + child_text)
+                action.triggered.connect(lambda checked, p=child_path: self.move_entry_to_group(entry_row, p))
+
+                if child.childCount() > 0:
+                    add_group_items(child, parent_menu, level + 1)
+
+        # Adicionar Raiz
+        root = self.groups_tree.topLevelItem(0)
+        if root:
+            root_action = menu.addAction("📁 Raiz")
+            root_action.triggered.connect(lambda: self.move_entry_to_group(entry_row, "Root"))
+            menu.addSeparator()
+            add_group_items(root, menu)
+
+    def move_entry_to_group(self, entry_row, group_path):
+        """Move uma entrada para outro grupo"""
+        if entry_row >= 0 and entry_row < len(self.entries):
+            old_group = self.entries[entry_row].get("group", "")
+            self.entries[entry_row]["group"] = group_path
+            self.is_modified = True
+            self.update_entries_table()
+            self.status_bar.showMessage(f"Entrada movida para '{group_path}'!", 3000)
+
+    def clone_entry(self, row):
+        """Clona uma entrada"""
+        if row >= 0 and row < len(self.entries):
+            original = self.entries[row]
+            clone = original.copy()
+            clone["title"] = f"{original['title']} (cópia)"
+            clone["created"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            clone["modified"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            self.entries.append(clone)
+            self.is_modified = True
+            self.update_entries_table()
+            self.status_bar.showMessage(f"Entrada clonada!", 3000)
+
+    def copy_entry_url(self, row):
+        """Copia URL da entrada"""
+        if row >= 0 and row < len(self.entries):
+            url = self.entries[row].get("url", "")
+            QApplication.clipboard().setText(url)
+            self.status_bar.showMessage("URL copiada!", 3000)
 
     def show_group_context_menu(self, position):
         """Exibe menu de contexto para grupos"""
