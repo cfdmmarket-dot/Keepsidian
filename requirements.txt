@@ -1,0 +1,13 @@
+# Keepsidian - Dependências Python
+
+# Interface gráfica (obrigatório)
+PyQt5>=5.15.0
+
+# Suporte a arquivos .kdbx (obrigatório)
+pykeepass>=4.0.0
+
+# Markdown preview (opcional)
+markdown>=3.4.0
+
+# Integração com IAs cloud (opcional)
+requests>=2.28.0
