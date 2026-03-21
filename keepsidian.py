@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 """
-KEEPSIDIAN - v0.2.0-alpha
+KEEPSIDIAN - v0.2.1-alpha
 Gerenciador de Senhas + Cofre de Conhecimento
 Base: KeePassXC | Inspiração: Obsidian | CFDM AI OS TRIPLEX
+
+CHANGELOG v0.2.1:
+- Menu de contexto completo para GRUPOS (botão direito)
+  - Novo grupo, subgrupo, renomear, clonar, mover, excluir
+- Tags salvam/carregam corretamente em .kdbx
+- Importação CSV preserva grupos originais
+- Árvore de grupos dinâmica baseada nas entradas
+- Filtro por grupo na tabela de entradas
+- Diálogo de entrada com botões min/max/fechar
+- Enter salva em qualquer campo do formulário
+- Mensagens de erro mais específicas
 
 CHANGELOG v0.2.0:
 - SUPORTE NATIVO A .KDBX (criar, abrir, salvar)
@@ -59,7 +70,7 @@ except ImportError:
     sys.exit(1)
 
 # Versão
-VERSION = "0.2.0-alpha"
+VERSION = "0.2.1-alpha"
 APP_NAME = "Keepsidian"
 
 # Verificar markdown
@@ -2720,11 +2731,21 @@ class EntryDialog(QDialog):
         self.entry_type = entry_type
         self.entry_data = entry_data or {}
         self.all_tags = all_tags or []
+
+        # Habilitar botões de minimizar, maximizar e fechar
+        self.setWindowFlags(
+            Qt.Window |
+            Qt.WindowMinimizeButtonHint |
+            Qt.WindowMaximizeButtonHint |
+            Qt.WindowCloseButtonHint
+        )
+
         self.setup_ui()
 
     def setup_ui(self):
         self.setWindowTitle("Nova Entrada" if not self.entry_data else "Editar Entrada")
         self.setMinimumSize(700, 550)
+        self.resize(850, 650)  # Tamanho inicial maior
 
         layout = QVBoxLayout(self)
 
@@ -2859,12 +2880,28 @@ class EntryDialog(QDialog):
         # Atualizar backlinks
         self.markdown_editor.editor.textChanged.connect(self.update_backlinks_list)
 
+        # Garantir que campos estejam habilitados inicialmente
+        self.on_type_changed(self.type_combo.currentText())
+
+        # Enter em qualquer campo salva a entrada
+        self.title_edit.returnPressed.connect(self.accept)
+        self.username_edit.returnPressed.connect(self.accept)
+        self.password_edit.returnPressed.connect(self.accept)
+        self.url_edit.returnPressed.connect(self.accept)
+        self.tags_edit.returnPressed.connect(self.accept)
+
     def on_type_changed(self, text):
         """Ajusta campos baseado no tipo selecionado"""
         is_note = "Nota" in text
+        # Habilitar/desabilitar campos baseado no tipo
         self.username_edit.setEnabled(not is_note)
         self.password_edit.setEnabled(not is_note)
         self.url_edit.setEnabled(not is_note)
+
+        # Sempre manter título e tags habilitados
+        self.title_edit.setEnabled(True)
+        self.tags_edit.setEnabled(True)
+
         if is_note:
             self.tabs.setCurrentIndex(1)  # Vai para aba de notas
 
@@ -3274,6 +3311,8 @@ class KeepsidianWindow(QMainWindow):
         self.groups_tree.setHeaderLabel("Grupos")
         self.groups_tree.setMinimumWidth(180)
         self.groups_tree.itemClicked.connect(self.on_group_selected)
+        self.groups_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.groups_tree.customContextMenuRequested.connect(self.show_group_context_menu)
         splitter.addWidget(self.groups_tree)
 
         # Painel central: Entradas
@@ -3493,6 +3532,10 @@ class KeepsidianWindow(QMainWindow):
                 self.entries = []
                 for entry in kp.entries:
                     if entry.title:
+                        # Converter tags de lista para string
+                        tags_list = entry.tags if hasattr(entry, 'tags') and entry.tags else []
+                        tags_str = ", ".join(tags_list) if tags_list else ""
+
                         entry_data = {
                             "type": "🔐 Senha",
                             "title": entry.title or "",
@@ -3500,7 +3543,7 @@ class KeepsidianWindow(QMainWindow):
                             "password": entry.password or "",
                             "url": entry.url or "",
                             "notes": entry.notes or "",
-                            "tags": "",
+                            "tags": tags_str,
                             "group": entry.group.name if entry.group else "Root",
                             "created": entry.ctime.strftime("%Y-%m-%d %H:%M") if entry.ctime else "",
                             "modified": entry.mtime.strftime("%Y-%m-%d %H:%M") if entry.mtime else "",
@@ -3624,7 +3667,7 @@ class KeepsidianWindow(QMainWindow):
                         entry.notes = entry_data.get('notes', '')
                     else:
                         # Criar nova entrada
-                        kp.add_entry(
+                        new_entry = kp.add_entry(
                             kp.root_group,
                             title=title,
                             username=entry_data.get('username', ''),
@@ -3632,6 +3675,10 @@ class KeepsidianWindow(QMainWindow):
                             url=entry_data.get('url', ''),
                             notes=entry_data.get('notes', '')
                         )
+                        # Adicionar tags
+                        tags_str = entry_data.get('tags', '')
+                        if tags_str:
+                            new_entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
 
                 kp.save()
             else:
@@ -3650,7 +3697,7 @@ class KeepsidianWindow(QMainWindow):
                 for entry_data in self.entries:
                     title = entry_data.get('title', '')
                     if title:
-                        kp.add_entry(
+                        new_entry = kp.add_entry(
                             kp.root_group,
                             title=title,
                             username=entry_data.get('username', ''),
@@ -3658,6 +3705,10 @@ class KeepsidianWindow(QMainWindow):
                             url=entry_data.get('url', ''),
                             notes=entry_data.get('notes', '')
                         )
+                        # Adicionar tags
+                        tags_str = entry_data.get('tags', '')
+                        if tags_str:
+                            new_entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
 
                 kp.save()
                 self._kp_instance = kp
@@ -3827,14 +3878,215 @@ class KeepsidianWindow(QMainWindow):
             QApplication.clipboard().setText(self.entries[row].get("password", ""))
             self.status_bar.showMessage("Senha copiada!", 3000)
 
+    def show_group_context_menu(self, position):
+        """Exibe menu de contexto para grupos"""
+        item = self.groups_tree.itemAt(position)
+
+        menu = QMenu()
+
+        # Novo grupo
+        new_action = menu.addAction("📁 Novo grupo")
+        new_action.triggered.connect(self.add_group)
+
+        # Novo subgrupo (só se tiver item selecionado)
+        if item:
+            new_sub_action = menu.addAction("📂 Novo subgrupo")
+            new_sub_action.triggered.connect(lambda: self.add_subgroup(item))
+
+        menu.addSeparator()
+
+        if item:
+            # Editar
+            edit_action = menu.addAction("✏️ Renomear grupo")
+            edit_action.triggered.connect(lambda: self.rename_group(item))
+
+            # Clonar
+            clone_action = menu.addAction("📋 Clonar grupo")
+            clone_action.triggered.connect(lambda: self.clone_group(item))
+
+            menu.addSeparator()
+
+            # Mover
+            move_menu = menu.addMenu("📦 Mover para...")
+            self._build_move_menu(move_menu, item)
+
+            menu.addSeparator()
+
+            # Excluir
+            delete_action = menu.addAction("🗑️ Excluir grupo")
+            delete_action.triggered.connect(lambda: self.delete_group(item))
+
+            # Não permitir excluir Raiz ou Lixeira
+            item_text = item.text(0)
+            if "Raiz" in item_text or "Lixeira" in item_text:
+                delete_action.setEnabled(False)
+                edit_action.setEnabled(False)
+
+        menu.addSeparator()
+
+        # Expandir/Colapsar todos
+        expand_action = menu.addAction("➕ Expandir todos")
+        expand_action.triggered.connect(self.groups_tree.expandAll)
+
+        collapse_action = menu.addAction("➖ Colapsar todos")
+        collapse_action.triggered.connect(self.groups_tree.collapseAll)
+
+        menu.exec_(self.groups_tree.mapToGlobal(position))
+
+    def _build_move_menu(self, menu, current_item):
+        """Constrói submenu de mover para outros grupos"""
+        def add_items(parent_item, parent_menu, level=0):
+            for i in range(parent_item.childCount()):
+                child = parent_item.child(i)
+                if child != current_item:
+                    child_text = child.text(0)
+                    action = parent_menu.addAction("  " * level + child_text)
+                    action.triggered.connect(lambda checked, c=child: self.move_group(current_item, c))
+
+                    if child.childCount() > 0:
+                        add_items(child, parent_menu, level + 1)
+
+        # Adicionar Raiz como opção
+        root = self.groups_tree.topLevelItem(0)
+        if root and root != current_item:
+            action = menu.addAction("📁 Raiz")
+            action.triggered.connect(lambda: self.move_group(current_item, root))
+            menu.addSeparator()
+            add_items(root, menu)
+
     def add_group(self):
+        """Adiciona novo grupo na raiz"""
         name, ok = QInputDialog.getText(self, "Novo Grupo", "Nome do grupo:")
         if ok and name:
-            selected = self.groups_tree.currentItem()
-            if selected:
-                QTreeWidgetItem(selected, [f"📁 {name}"])
+            root = self.groups_tree.topLevelItem(0)  # Raiz
+            if root:
+                new_item = QTreeWidgetItem(root, [f"📁 {name}"])
+                new_item.setData(0, Qt.UserRole, name)
+                root.setExpanded(True)
+                self.is_modified = True
+                self.status_bar.showMessage(f"Grupo '{name}' criado!", 3000)
+
+    def add_subgroup(self, parent_item):
+        """Adiciona subgrupo dentro do grupo selecionado"""
+        name, ok = QInputDialog.getText(self, "Novo Subgrupo", "Nome do subgrupo:")
+        if ok and name:
+            new_item = QTreeWidgetItem(parent_item, [f"📁 {name}"])
+            parent_path = parent_item.data(0, Qt.UserRole) or ""
+            new_path = f"{parent_path}/{name}" if parent_path else name
+            new_item.setData(0, Qt.UserRole, new_path)
+            parent_item.setExpanded(True)
+            self.is_modified = True
+            self.status_bar.showMessage(f"Subgrupo '{name}' criado!", 3000)
+
+    def rename_group(self, item):
+        """Renomeia um grupo"""
+        old_name = item.text(0).split(" ", 1)[-1]  # Remove ícone
+        new_name, ok = QInputDialog.getText(self, "Renomear Grupo", "Novo nome:", text=old_name)
+        if ok and new_name and new_name != old_name:
+            # Detectar ícone atual
+            current_text = item.text(0)
+            icon = current_text.split(" ")[0] if " " in current_text else "📁"
+            item.setText(0, f"{icon} {new_name}")
+
+            # Atualizar path
+            old_path = item.data(0, Qt.UserRole) or old_name
+            new_path = old_path.rsplit("/", 1)
+            new_path = f"{new_path[0]}/{new_name}" if len(new_path) > 1 else new_name
+            item.setData(0, Qt.UserRole, new_path)
+
+            # Atualizar entradas que usam este grupo
+            for entry in self.entries:
+                if entry.get("group", "").startswith(old_path):
+                    entry["group"] = entry["group"].replace(old_path, new_path, 1)
+
+            self.is_modified = True
+            self.status_bar.showMessage(f"Grupo renomeado para '{new_name}'!", 3000)
+
+    def clone_group(self, item):
+        """Clona um grupo com todas as entradas"""
+        old_name = item.text(0).split(" ", 1)[-1]
+        new_name, ok = QInputDialog.getText(self, "Clonar Grupo", "Nome do clone:", text=f"{old_name} (cópia)")
+        if ok and new_name:
+            parent = item.parent() or self.groups_tree.invisibleRootItem()
+            new_item = QTreeWidgetItem(parent, [f"📁 {new_name}"])
+
+            old_path = item.data(0, Qt.UserRole) or old_name
+            new_path = old_path.rsplit("/", 1)
+            new_path = f"{new_path[0]}/{new_name}" if len(new_path) > 1 else new_name
+            new_item.setData(0, Qt.UserRole, new_path)
+
+            # Clonar entradas do grupo
+            cloned_count = 0
+            for entry in self.entries[:]:  # Cópia para iterar
+                if entry.get("group", "") == old_path:
+                    new_entry = entry.copy()
+                    new_entry["group"] = new_path
+                    new_entry["title"] = f"{entry['title']} (cópia)"
+                    self.entries.append(new_entry)
+                    cloned_count += 1
+
+            self.is_modified = True
+            self.update_entries_table()
+            self.status_bar.showMessage(f"Grupo clonado! {cloned_count} entradas copiadas.", 3000)
+
+    def move_group(self, item, new_parent):
+        """Move um grupo para outro local"""
+        old_parent = item.parent()
+        if old_parent:
+            old_parent.removeChild(item)
+        else:
+            index = self.groups_tree.indexOfTopLevelItem(item)
+            self.groups_tree.takeTopLevelItem(index)
+
+        new_parent.addChild(item)
+        new_parent.setExpanded(True)
+
+        # Atualizar path
+        group_name = item.text(0).split(" ", 1)[-1]
+        parent_path = new_parent.data(0, Qt.UserRole) or ""
+        new_path = f"{parent_path}/{group_name}" if parent_path else group_name
+        old_path = item.data(0, Qt.UserRole) or group_name
+        item.setData(0, Qt.UserRole, new_path)
+
+        # Atualizar entradas
+        for entry in self.entries:
+            if entry.get("group", "").startswith(old_path):
+                entry["group"] = entry["group"].replace(old_path, new_path, 1)
+
+        self.is_modified = True
+        self.status_bar.showMessage(f"Grupo movido!", 3000)
+
+    def delete_group(self, item):
+        """Exclui um grupo (move entradas para Raiz)"""
+        group_name = item.text(0).split(" ", 1)[-1]
+        group_path = item.data(0, Qt.UserRole) or group_name
+
+        # Contar entradas afetadas
+        affected = sum(1 for e in self.entries if e.get("group", "").startswith(group_path))
+
+        reply = QMessageBox.question(self, "Excluir Grupo",
+            f"Excluir grupo '{group_name}'?\n\n"
+            f"⚠️ {affected} entradas serão movidas para 'Raiz'.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            # Mover entradas para Raiz
+            for entry in self.entries:
+                if entry.get("group", "").startswith(group_path):
+                    entry["group"] = "Root"
+
+            # Remover item da árvore
+            parent = item.parent()
+            if parent:
+                parent.removeChild(item)
             else:
-                QTreeWidgetItem(self.groups_tree, [f"📁 {name}"])
+                index = self.groups_tree.indexOfTopLevelItem(item)
+                self.groups_tree.takeTopLevelItem(index)
+
+            self.is_modified = True
+            self.update_entries_table()
+            self.status_bar.showMessage(f"Grupo '{group_name}' excluído!", 3000)
 
     def update_entries_table(self, filter_text=None, tag_filter=None, group_filter=None):
         self.entries_table.setRowCount(0)
