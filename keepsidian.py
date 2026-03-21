@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
-KEEPSIDIAN - v0.2.3-alpha
+KEEPSIDIAN - v0.2.4-alpha
 Gerenciador de Senhas + Cofre de Conhecimento
 Base: KeePassXC | Inspiração: Obsidian | CFDM AI OS TRIPLEX
+
+CHANGELOG v0.2.4:
+- CORREÇÃO: "Salvar Como" agora cria novo arquivo corretamente
+- CORREÇÃO: Nome do arquivo atualiza no título da aplicação
+- Limpa instância .kdbx antiga para forçar novo arquivo
 
 CHANGELOG v0.2.3:
 - CORREÇÃO: Salvar Como agora pede senha se necessário
@@ -83,7 +88,7 @@ except ImportError:
     sys.exit(1)
 
 # Versão
-VERSION = "0.2.3-alpha"
+VERSION = "0.2.4-alpha"
 APP_NAME = "Keepsidian"
 
 # Verificar markdown
@@ -3646,8 +3651,12 @@ class KeepsidianWindow(QMainWindow):
             self.save_vault_as()
 
     def save_vault_as(self):
+        # Sugerir nome baseado no vault atual
+        suggested_name = getattr(self, 'vault_name', 'NovoVault') or 'NovoVault'
+
         file_path, selected_filter = QFileDialog.getSaveFileName(
-            self, "Salvar banco de dados como", "",
+            self, "Salvar banco de dados como",
+            f"{suggested_name}.kdbx",
             "KeePass (*.kdbx);;Keepsidian JSON (*.kpsn)"
         )
         if file_path:
@@ -3656,8 +3665,23 @@ class KeepsidianWindow(QMainWindow):
                     file_path += '.kdbx'
                 else:
                     file_path += '.kpsn'
+
+            print(f"[DEBUG] Salvar Como: {file_path}")
+
+            # IMPORTANTE: Limpar instância antiga para forçar criar novo arquivo
+            old_kp = getattr(self, '_kp_instance', None)
+            self._kp_instance = None
+
+            # Salvar no novo arquivo
             self._save_to_file(file_path)
+
+            # Atualizar nome e título
             self.current_file = file_path
+            self.vault_name = Path(file_path).stem
+            self.setWindowTitle(f"{APP_NAME} - {self.vault_name} v{VERSION}")
+
+            print(f"[DEBUG] Novo arquivo: {self.current_file}")
+            print(f"[DEBUG] Novo nome: {self.vault_name}")
 
     def _save_to_file(self, file_path):
         """Salva banco de dados - detecta formato pelo extensão"""
