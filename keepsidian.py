@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-KEEPSIDIAN - v0.2.2-alpha
+KEEPSIDIAN - v0.2.3-alpha
 Gerenciador de Senhas + Cofre de Conhecimento
 Base: KeePassXC | Inspiração: Obsidian | CFDM AI OS TRIPLEX
+
+CHANGELOG v0.2.3:
+- CORREÇÃO: Salvar Como agora pede senha se necessário
+- CORREÇÃO: Tags são atualizadas ao salvar
+- Confirmação visual ao salvar arquivo
+- Debug melhorado no salvamento
 
 CHANGELOG v0.2.2:
 - Menu de contexto para ENTRADAS (botão direito)
@@ -77,7 +83,7 @@ except ImportError:
     sys.exit(1)
 
 # Versão
-VERSION = "0.2.2-alpha"
+VERSION = "0.2.3-alpha"
 APP_NAME = "Keepsidian"
 
 # Verificar markdown
@@ -3668,10 +3674,14 @@ class KeepsidianWindow(QMainWindow):
                 "Execute: pip install pykeepass")
             return
 
+        print(f"[DEBUG] Salvando .kdbx: {file_path}")
+        print(f"[DEBUG] Entradas a salvar: {len(self.entries)}")
+
         try:
-            # Se já temos uma instância do PyKeePass, usar ela
-            if hasattr(self, '_kp_instance') and self._kp_instance:
+            # Se já temos uma instância do PyKeePass E é o mesmo arquivo, usar ela
+            if hasattr(self, '_kp_instance') and self._kp_instance and self.current_file == file_path:
                 kp = self._kp_instance
+                print("[DEBUG] Usando instância existente")
 
                 # Atualizar entradas existentes e adicionar novas
                 existing_titles = {e.title: e for e in kp.entries if e.title}
@@ -3688,6 +3698,12 @@ class KeepsidianWindow(QMainWindow):
                         entry.password = entry_data.get('password', '')
                         entry.url = entry_data.get('url', '')
                         entry.notes = entry_data.get('notes', '')
+                        # Atualizar tags também!
+                        tags_str = entry_data.get('tags', '')
+                        if tags_str:
+                            entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
+                        else:
+                            entry.tags = []
                     else:
                         # Criar nova entrada
                         new_entry = kp.add_entry(
@@ -3704,15 +3720,27 @@ class KeepsidianWindow(QMainWindow):
                             new_entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
 
                 kp.save()
+                print(f"[DEBUG] Salvo com sucesso usando instância existente")
             else:
                 # Criar novo arquivo .kdbx
-                if not self.vault_password:
-                    QMessageBox.warning(self, "Erro", "Defina uma senha para o banco!")
-                    return
+                print("[DEBUG] Criando novo arquivo .kdbx")
+
+                # Pedir senha se não tiver
+                password = self.vault_password
+                if not password:
+                    password, ok = QInputDialog.getText(
+                        self, "Senha do Banco",
+                        "Digite a senha para o novo arquivo .kdbx:",
+                        QLineEdit.Password
+                    )
+                    if not ok or not password:
+                        QMessageBox.warning(self, "Cancelado", "Salvamento cancelado - senha necessária.")
+                        return
+                    self.vault_password = password
 
                 kp = create_database(
                     file_path,
-                    password=self.vault_password,
+                    password=password,
                     keyfile=self.vault_keyfile
                 )
 
@@ -3735,10 +3763,12 @@ class KeepsidianWindow(QMainWindow):
 
                 kp.save()
                 self._kp_instance = kp
+                print(f"[DEBUG] Novo arquivo criado com {len(self.entries)} entradas")
 
             self.is_modified = False
             self.current_file = file_path
             self.status_bar.showMessage(f"✅ Salvo: {file_path}", 3000)
+            QMessageBox.information(self, "Salvo", f"✅ Arquivo salvo com sucesso!\n\n{file_path}")
 
         except Exception as e:
             import traceback
