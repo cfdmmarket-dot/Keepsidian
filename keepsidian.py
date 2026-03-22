@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-KEEPSIDIAN - v0.2.7-alpha
+KEEPSIDIAN - v0.2.8-alpha
 Gerenciador de Senhas + Cofre de Conhecimento
 Base: KeePassXC | Inspiração: Obsidian | CFDM AI OS TRIPLEX
+
+CHANGELOG v0.2.8:
+- CORREÇÃO: Importação CSV busca campo Group em múltiplas variações
+- Debug mostra campos disponíveis no CSV
+- Hierarquia por espaços aplicada também ao CSV
+- NOVO: Loader/progresso ao salvar banco de dados
 
 CHANGELOG v0.2.7:
 - NOVO: Hierarquia por espaços no nome do grupo
@@ -106,7 +112,7 @@ except ImportError:
     sys.exit(1)
 
 # Versão
-VERSION = "0.2.7-alpha"
+VERSION = "0.2.8-alpha"
 APP_NAME = "Keepsidian"
 
 # Verificar markdown
@@ -2470,17 +2476,52 @@ class ImportWizard(QDialog):
                 import csv
                 with open(file_path, 'r', encoding='utf-8') as f:
                     reader = csv.DictReader(f)
+
+                    # Mostrar campos disponíveis (primeiro debug)
+                    first_row = True
+                    all_groups = []  # Para aplicar hierarquia depois
+
                     for row in reader:
-                        # KeePassXC exporta com "Group" - preservar a estrutura
-                        group = row.get("Group", row.get("group", row.get("Folder", "")))
+                        if first_row:
+                            print(f"[DEBUG] Campos do CSV: {list(row.keys())}")
+                            first_row = False
+
+                        # KeePassXC exporta com "Group" - tentar TODAS as variações
+                        group = None
+                        for key in ["Group", "group", "Folder", "folder", "Grupo", "grupo", "Path", "path"]:
+                            if key in row and row[key]:
+                                group = row[key]
+                                print(f"[DEBUG] Campo '{key}' encontrado: '{group}'")
+                                break
+
+                        # Se não encontrou, procurar qualquer coluna com "group" no nome
+                        if not group:
+                            for key in row.keys():
+                                if "group" in key.lower() or "folder" in key.lower() or "path" in key.lower():
+                                    group = row[key]
+                                    print(f"[DEBUG] Campo alternativo '{key}': '{group}'")
+                                    break
+
+                        # Se ainda vazio, usar última coluna (comum em CSVs)
+                        if not group:
+                            keys = list(row.keys())
+                            if keys:
+                                last_key = keys[-1]
+                                if row.get(last_key):
+                                    group = row[last_key]
+                                    print(f"[DEBUG] Usando última coluna '{last_key}': '{group}'")
+
                         if not group:
                             group = "Importado CSV"
 
+                        all_groups.append(group)
+
                         # Detectar tipo baseado no grupo ou campos
                         entry_type = "🔐 Senha"
-                        if "nota" in group.lower() or "note" in group.lower():
+                        group_lower = group.lower() if group else ""
+                        if "nota" in group_lower or "note" in group_lower:
                             entry_type = "📝 Nota"
-                        elif "cartão" in group.lower() or "card" in group.lower():
+                        elif "cartão" in group_lower or "card" in group_lower:
                             entry_type = "💳 Cartão"
 
                         entry = {
@@ -2497,6 +2538,47 @@ class ImportWizard(QDialog):
                         }
                         if entry["title"] or entry["username"]:
                             self.imported_entries.append(entry)
+
+                # Aplicar hierarquia por espaços (2 espaços = 1 nível)
+                unique_groups = []
+                seen = set()
+                for g in all_groups:
+                    if g not in seen:
+                        unique_groups.append(g)
+                        seen.add(g)
+
+                # Construir mapa de hierarquia
+                SPACES_PER_LEVEL = 2
+                hierarchy_map = {}
+                level_stack = []
+
+                for group_name in unique_groups:
+                    if not group_name or group_name == "Importado CSV":
+                        continue
+
+                    stripped = group_name.lstrip(' ')
+                    leading_spaces = len(group_name) - len(stripped)
+                    level = leading_spaces // SPACES_PER_LEVEL
+                    clean_name = stripped
+
+                    while level_stack and level_stack[-1][0] >= level:
+                        level_stack.pop()
+
+                    if level_stack:
+                        parent_path = "/".join([name for _, name in level_stack])
+                        full_path = f"{parent_path}/{clean_name}"
+                    else:
+                        full_path = clean_name
+
+                    hierarchy_map[group_name] = full_path
+                    level_stack.append((level, clean_name))
+                    print(f"[DEBUG] Grupo CSV '{group_name}' -> '{full_path}'")
+
+                # Aplicar hierarquia às entradas
+                for entry in self.imported_entries:
+                    old_group = entry.get("group", "")
+                    if old_group in hierarchy_map:
+                        entry["group"] = hierarchy_map[old_group]
 
                 print(f"[DEBUG] CSV importado: {len(self.imported_entries)} entradas")
 
@@ -3846,10 +3928,27 @@ class KeepsidianWindow(QMainWindow):
 
     def _save_to_file(self, file_path):
         """Salva banco de dados - detecta formato pelo extensão"""
-        if file_path.endswith('.kdbx'):
-            self._save_kdbx(file_path)
-        else:
-            self._save_kpsn(file_path)
+        # Mostrar loader
+        self.status_bar.showMessage("💾 Salvando...")
+        QApplication.processEvents()
+
+        # Criar diálogo de progresso
+        from PyQt5.QtWidgets import QProgressDialog
+        progress = QProgressDialog("Salvando banco de dados...", None, 0, 0, self)
+        progress.setWindowTitle("Salvando")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            if file_path.endswith('.kdbx'):
+                self._save_kdbx(file_path)
+            else:
+                self._save_kpsn(file_path)
+        finally:
+            progress.close()
 
     def _save_kdbx(self, file_path):
         """Salva em formato .kdbx usando pykeepass"""
