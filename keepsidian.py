@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-KEEPSIDIAN - v0.2.6-alpha
+KEEPSIDIAN - v0.2.7-alpha
 Gerenciador de Senhas + Cofre de Conhecimento
 Base: KeePassXC | Inspiração: Obsidian | CFDM AI OS TRIPLEX
+
+CHANGELOG v0.2.7:
+- NOVO: Hierarquia por espaços no nome do grupo
+- 2 espaços no início = 1 nível de profundidade
+- Função build_hierarchy_from_spaces() converte automaticamente
+- "  Internet" vira filho de "Senhas" (grupo anterior sem espaços)
 
 CHANGELOG v0.2.6:
 - CORREÇÃO: Importar/abrir .kdbx agora lê caminho COMPLETO dos grupos
@@ -100,7 +106,7 @@ except ImportError:
     sys.exit(1)
 
 # Versão
-VERSION = "0.2.6-alpha"
+VERSION = "0.2.7-alpha"
 APP_NAME = "Keepsidian"
 
 # Verificar markdown
@@ -2342,10 +2348,66 @@ class ImportWizard(QDialog):
                     current = current.parentgroup
                 return "/".join(path_parts) if path_parts else ""
 
+            def build_hierarchy_from_spaces(kp):
+                """
+                Constrói hierarquia baseada em espaços no início do nome.
+                2 espaços = 1 nível de profundidade.
+                Retorna dict: nome_original -> caminho_hierarquico
+                """
+                SPACES_PER_LEVEL = 2
+                hierarchy_map = {}
+                level_stack = []  # [(nivel, nome_limpo), ...]
+
+                # Coletar todos os grupos (exceto Root)
+                all_groups = []
+                def collect_groups(group):
+                    for subgroup in group.subgroups:
+                        all_groups.append(subgroup.name)
+                        collect_groups(subgroup)
+                collect_groups(kp.root_group)
+
+                # Ordenar para processar na ordem correta
+                for group_name in all_groups:
+                    if not group_name:
+                        continue
+
+                    # Contar espaços no início
+                    stripped = group_name.lstrip(' ')
+                    leading_spaces = len(group_name) - len(stripped)
+                    level = leading_spaces // SPACES_PER_LEVEL
+                    clean_name = stripped
+
+                    # Atualizar pilha de níveis
+                    while level_stack and level_stack[-1][0] >= level:
+                        level_stack.pop()
+
+                    # Construir caminho
+                    if level_stack:
+                        parent_path = "/".join([name for _, name in level_stack])
+                        full_path = f"{parent_path}/{clean_name}"
+                    else:
+                        full_path = clean_name
+
+                    hierarchy_map[group_name] = full_path
+                    level_stack.append((level, clean_name))
+
+                    print(f"[DEBUG] Grupo '{group_name}' -> '{full_path}' (nível {level})")
+
+                return hierarchy_map
+
+            # Construir mapa de hierarquia baseado em espaços
+            hierarchy_map = build_hierarchy_from_spaces(kp)
+
             # Iterar por todas as entradas
             for entry in kp.entries:
                 if entry.title:  # Ignorar entradas vazias
+                    # Primeiro tenta hierarquia real
                     group_path = get_group_path(entry.group)
+
+                    # Se o grupo está no mapa de espaços, usa o caminho convertido
+                    if entry.group and entry.group.name in hierarchy_map:
+                        group_path = hierarchy_map[entry.group.name]
+
                     print(f"[DEBUG] Entrada '{entry.title}' grupo: '{group_path}'")
 
                     entry_data = {
@@ -3602,6 +3664,56 @@ class KeepsidianWindow(QMainWindow):
                         current = current.parentgroup
                     return "/".join(path_parts) if path_parts else ""
 
+                def build_hierarchy_from_spaces(kp):
+                    """
+                    Constrói hierarquia baseada em espaços no início do nome.
+                    2 espaços = 1 nível de profundidade.
+                    Retorna dict: nome_original -> caminho_hierarquico
+                    """
+                    SPACES_PER_LEVEL = 2
+                    hierarchy_map = {}
+                    level_stack = []  # [(nivel, nome_limpo), ...]
+
+                    # Coletar todos os grupos (exceto Root)
+                    all_groups = []
+                    def collect_groups(group):
+                        for subgroup in group.subgroups:
+                            all_groups.append(subgroup.name)
+                            collect_groups(subgroup)
+                    collect_groups(kp.root_group)
+
+                    # Processar na ordem
+                    for group_name in all_groups:
+                        if not group_name:
+                            continue
+
+                        # Contar espaços no início
+                        stripped = group_name.lstrip(' ')
+                        leading_spaces = len(group_name) - len(stripped)
+                        level = leading_spaces // SPACES_PER_LEVEL
+                        clean_name = stripped
+
+                        # Atualizar pilha de níveis
+                        while level_stack and level_stack[-1][0] >= level:
+                            level_stack.pop()
+
+                        # Construir caminho
+                        if level_stack:
+                            parent_path = "/".join([name for _, name in level_stack])
+                            full_path = f"{parent_path}/{clean_name}"
+                        else:
+                            full_path = clean_name
+
+                        hierarchy_map[group_name] = full_path
+                        level_stack.append((level, clean_name))
+
+                        print(f"[DEBUG] Grupo '{group_name}' -> '{full_path}' (nível {level})")
+
+                    return hierarchy_map
+
+                # Construir mapa de hierarquia baseado em espaços
+                hierarchy_map = build_hierarchy_from_spaces(kp)
+
                 # Converter entradas
                 self.entries = []
                 for entry in kp.entries:
@@ -3610,8 +3722,13 @@ class KeepsidianWindow(QMainWindow):
                         tags_list = entry.tags if hasattr(entry, 'tags') and entry.tags else []
                         tags_str = ", ".join(tags_list) if tags_list else ""
 
-                        # Obter caminho completo do grupo
+                        # Obter caminho - primeiro tenta hierarquia real
                         group_path = get_group_path(entry.group)
+
+                        # Se o grupo está no mapa de espaços, usa o caminho convertido
+                        if entry.group and entry.group.name in hierarchy_map:
+                            group_path = hierarchy_map[entry.group.name]
+
                         print(f"[DEBUG] Entrada '{entry.title}' grupo: '{group_path}'")
 
                         entry_data = {
