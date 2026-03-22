@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-KEEPSIDIAN - v0.2.4-alpha
+KEEPSIDIAN - v0.2.5-alpha
 Gerenciador de Senhas + Cofre de Conhecimento
 Base: KeePassXC | Inspiração: Obsidian | CFDM AI OS TRIPLEX
+
+CHANGELOG v0.2.5:
+- CORREÇÃO: Grupos são criados ao importar/salvar .kdbx
+- CORREÇÃO: Entradas duplicadas recebem sufixo numérico automático
+- Suporte a hierarquia de grupos (Pasta/Subpasta)
+- Documentação para Obsidian (docs/)
 
 CHANGELOG v0.2.4:
 - CORREÇÃO: "Salvar Como" agora cria novo arquivo corretamente
@@ -88,7 +94,7 @@ except ImportError:
     sys.exit(1)
 
 # Versão
-VERSION = "0.2.4-alpha"
+VERSION = "0.2.5-alpha"
 APP_NAME = "Keepsidian"
 
 # Verificar markdown
@@ -3701,47 +3707,106 @@ class KeepsidianWindow(QMainWindow):
         print(f"[DEBUG] Salvando .kdbx: {file_path}")
         print(f"[DEBUG] Entradas a salvar: {len(self.entries)}")
 
+        def get_or_create_group(kp, group_path):
+            """Obtém ou cria um grupo baseado no caminho (ex: 'Pasta/Subpasta')"""
+            if not group_path or group_path in ('Root', 'root', ''):
+                return kp.root_group
+
+            parts = group_path.split('/')
+            current_group = kp.root_group
+
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                # Procurar subgrupo existente
+                found = None
+                for subgroup in current_group.subgroups:
+                    if subgroup.name == part:
+                        found = subgroup
+                        break
+
+                if found:
+                    current_group = found
+                else:
+                    # Criar novo subgrupo
+                    current_group = kp.add_group(current_group, part)
+                    print(f"[DEBUG] Grupo criado: {part}")
+
+            return current_group
+
+        def find_entry_by_title_and_group(kp, title, group):
+            """Busca entrada pelo título E grupo"""
+            for entry in kp.entries:
+                if entry.title == title and entry.group == group:
+                    return entry
+            return None
+
         try:
             # Se já temos uma instância do PyKeePass E é o mesmo arquivo, usar ela
             if hasattr(self, '_kp_instance') and self._kp_instance and self.current_file == file_path:
                 kp = self._kp_instance
                 print("[DEBUG] Usando instância existente")
 
-                # Atualizar entradas existentes e adicionar novas
-                existing_titles = {e.title: e for e in kp.entries if e.title}
-
                 for entry_data in self.entries:
                     title = entry_data.get('title', '')
                     if not title:
                         continue
 
-                    if title in existing_titles:
+                    group_name = entry_data.get('group', '')
+                    target_group = get_or_create_group(kp, group_name)
+
+                    # Buscar entrada existente por título + grupo
+                    existing_entry = find_entry_by_title_and_group(kp, title, target_group)
+
+                    if existing_entry:
                         # Atualizar entrada existente
-                        entry = existing_titles[title]
-                        entry.username = entry_data.get('username', '')
-                        entry.password = entry_data.get('password', '')
-                        entry.url = entry_data.get('url', '')
-                        entry.notes = entry_data.get('notes', '')
-                        # Atualizar tags também!
+                        existing_entry.username = entry_data.get('username', '')
+                        existing_entry.password = entry_data.get('password', '')
+                        existing_entry.url = entry_data.get('url', '')
+                        existing_entry.notes = entry_data.get('notes', '')
                         tags_str = entry_data.get('tags', '')
                         if tags_str:
-                            entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
+                            existing_entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
                         else:
-                            entry.tags = []
+                            existing_entry.tags = []
                     else:
-                        # Criar nova entrada
-                        new_entry = kp.add_entry(
-                            kp.root_group,
-                            title=title,
-                            username=entry_data.get('username', ''),
-                            password=entry_data.get('password', ''),
-                            url=entry_data.get('url', ''),
-                            notes=entry_data.get('notes', '')
-                        )
-                        # Adicionar tags
-                        tags_str = entry_data.get('tags', '')
-                        if tags_str:
-                            new_entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
+                        # Criar nova entrada no grupo correto
+                        try:
+                            new_entry = kp.add_entry(
+                                target_group,
+                                title=title,
+                                username=entry_data.get('username', ''),
+                                password=entry_data.get('password', ''),
+                                url=entry_data.get('url', ''),
+                                notes=entry_data.get('notes', '')
+                            )
+                            tags_str = entry_data.get('tags', '')
+                            if tags_str:
+                                new_entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
+                        except Exception as e:
+                            if "already exists" in str(e).lower():
+                                # Se já existe, criar com sufixo numérico
+                                suffix = 2
+                                while True:
+                                    new_title = f"{title} ({suffix})"
+                                    try:
+                                        new_entry = kp.add_entry(
+                                            target_group,
+                                            title=new_title,
+                                            username=entry_data.get('username', ''),
+                                            password=entry_data.get('password', ''),
+                                            url=entry_data.get('url', ''),
+                                            notes=entry_data.get('notes', '')
+                                        )
+                                        print(f"[DEBUG] Entrada duplicada renomeada: {new_title}")
+                                        break
+                                    except:
+                                        suffix += 1
+                                        if suffix > 100:
+                                            break
+                            else:
+                                raise
 
                 kp.save()
                 print(f"[DEBUG] Salvo com sucesso usando instância existente")
@@ -3768,22 +3833,46 @@ class KeepsidianWindow(QMainWindow):
                     keyfile=self.vault_keyfile
                 )
 
-                # Adicionar todas as entradas
+                # Adicionar todas as entradas com seus grupos
                 for entry_data in self.entries:
                     title = entry_data.get('title', '')
                     if title:
-                        new_entry = kp.add_entry(
-                            kp.root_group,
-                            title=title,
-                            username=entry_data.get('username', ''),
-                            password=entry_data.get('password', ''),
-                            url=entry_data.get('url', ''),
-                            notes=entry_data.get('notes', '')
-                        )
-                        # Adicionar tags
-                        tags_str = entry_data.get('tags', '')
-                        if tags_str:
-                            new_entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
+                        group_name = entry_data.get('group', '')
+                        target_group = get_or_create_group(kp, group_name)
+
+                        try:
+                            new_entry = kp.add_entry(
+                                target_group,
+                                title=title,
+                                username=entry_data.get('username', ''),
+                                password=entry_data.get('password', ''),
+                                url=entry_data.get('url', ''),
+                                notes=entry_data.get('notes', '')
+                            )
+                            tags_str = entry_data.get('tags', '')
+                            if tags_str:
+                                new_entry.tags = [t.strip() for t in tags_str.split(',') if t.strip()]
+                        except Exception as e:
+                            if "already exists" in str(e).lower():
+                                # Se já existe, criar com sufixo
+                                suffix = 2
+                                while suffix <= 100:
+                                    new_title = f"{title} ({suffix})"
+                                    try:
+                                        new_entry = kp.add_entry(
+                                            target_group,
+                                            title=new_title,
+                                            username=entry_data.get('username', ''),
+                                            password=entry_data.get('password', ''),
+                                            url=entry_data.get('url', ''),
+                                            notes=entry_data.get('notes', '')
+                                        )
+                                        print(f"[DEBUG] Duplicada renomeada: {new_title}")
+                                        break
+                                    except:
+                                        suffix += 1
+                            else:
+                                raise
 
                 kp.save()
                 self._kp_instance = kp
