@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-KEEPSIDIAN - v0.2.8-alpha
+KEEPSIDIAN - v0.2.9-alpha
 Gerenciador de Senhas + Cofre de Conhecimento
 Base: KeePassXC | Inspiração: Obsidian | CFDM AI OS TRIPLEX
+
+CHANGELOG v0.2.9:
+- Suporte a múltiplos formatos de CSV:
+  - KeePassXC: Title, Username, Password, URL, Notes, Group
+  - KeePass 1.x: Account, Login Name, Password, Web Site, Comments
+  - Genérico: qualquer variação de nomes de campos
+- Função get_field() busca campo por múltiplas chaves
 
 CHANGELOG v0.2.8:
 - CORREÇÃO: Importação CSV busca campo Group em múltiplas variações
@@ -112,7 +119,7 @@ except ImportError:
     sys.exit(1)
 
 # Versão
-VERSION = "0.2.8-alpha"
+VERSION = "0.2.9-alpha"
 APP_NAME = "Keepsidian"
 
 # Verificar markdown
@@ -2524,17 +2531,29 @@ class ImportWizard(QDialog):
                         elif "cartão" in group_lower or "card" in group_lower:
                             entry_type = "💳 Cartão"
 
+                        # Mapear campos - suporta múltiplos formatos:
+                        # KeePassXC: Title, Username, Password, URL, Notes, Group
+                        # KeePass 1.x: Account, Login Name, Password, Web Site, Comments
+                        # Genérico: title, username, password, url, notes
+
+                        def get_field(row, *keys):
+                            """Busca campo por múltiplas chaves possíveis"""
+                            for key in keys:
+                                if key in row and row[key]:
+                                    return row[key]
+                            return ""
+
                         entry = {
                             "type": entry_type,
-                            "title": row.get("Title", row.get("title", row.get("name", ""))),
-                            "username": row.get("Username", row.get("username", row.get("login", ""))),
-                            "password": row.get("Password", row.get("password", "")),
-                            "url": row.get("URL", row.get("url", row.get("website", ""))),
-                            "notes": row.get("Notes", row.get("notes", "")),
-                            "tags": row.get("Tags", row.get("tags", "")),
+                            "title": get_field(row, "Title", "title", "Account", "Name", "name", "Entry"),
+                            "username": get_field(row, "Username", "username", "Login Name", "Login", "login", "User", "user", "Email", "email"),
+                            "password": get_field(row, "Password", "password", "Pass", "pass", "Secret", "secret"),
+                            "url": get_field(row, "URL", "url", "Web Site", "Website", "website", "URI", "uri", "Link", "link"),
+                            "notes": get_field(row, "Notes", "notes", "Comments", "comments", "Description", "description", "Note", "note"),
+                            "tags": get_field(row, "Tags", "tags", "Tag", "tag", "Labels", "labels"),
                             "group": group,
-                            "created": row.get("Created", row.get("created", datetime.now().strftime("%Y-%m-%d %H:%M"))),
-                            "modified": row.get("Modified", row.get("modified", datetime.now().strftime("%Y-%m-%d %H:%M"))),
+                            "created": get_field(row, "Created", "created", "Creation Time", "creation_time") or datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "modified": get_field(row, "Modified", "modified", "Last Modified", "last_modified") or datetime.now().strftime("%Y-%m-%d %H:%M"),
                         }
                         if entry["title"] or entry["username"]:
                             self.imported_entries.append(entry)
