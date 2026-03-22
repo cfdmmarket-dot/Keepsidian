@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-KEEPSIDIAN - v0.2.5-alpha
+KEEPSIDIAN - v0.2.6-alpha
 Gerenciador de Senhas + Cofre de Conhecimento
 Base: KeePassXC | Inspiração: Obsidian | CFDM AI OS TRIPLEX
+
+CHANGELOG v0.2.6:
+- CORREÇÃO: Importar/abrir .kdbx agora lê caminho COMPLETO dos grupos
+- Função get_group_path() percorre hierarquia até a raiz
+- Tags também são importadas corretamente
+- Debug mostra grupo de cada entrada
 
 CHANGELOG v0.2.5:
 - CORREÇÃO: Grupos são criados ao importar/salvar .kdbx
@@ -94,7 +100,7 @@ except ImportError:
     sys.exit(1)
 
 # Versão
-VERSION = "0.2.5-alpha"
+VERSION = "0.2.6-alpha"
 APP_NAME = "Keepsidian"
 
 # Verificar markdown
@@ -2325,9 +2331,23 @@ class ImportWizard(QDialog):
 
             self.imported_entries = []
 
+            def get_group_path(group):
+                """Obtém o caminho completo do grupo (Pasta/Subpasta/...)"""
+                if not group:
+                    return ""
+                path_parts = []
+                current = group
+                while current and current.name and current.name != "Root":
+                    path_parts.insert(0, current.name)
+                    current = current.parentgroup
+                return "/".join(path_parts) if path_parts else ""
+
             # Iterar por todas as entradas
             for entry in kp.entries:
                 if entry.title:  # Ignorar entradas vazias
+                    group_path = get_group_path(entry.group)
+                    print(f"[DEBUG] Entrada '{entry.title}' grupo: '{group_path}'")
+
                     entry_data = {
                         "type": "🔐 Senha",
                         "title": entry.title or "",
@@ -2335,11 +2355,14 @@ class ImportWizard(QDialog):
                         "password": entry.password or "",
                         "url": entry.url or "",
                         "notes": entry.notes or "",
-                        "group": entry.group.name if entry.group else "Importado",
+                        "group": group_path if group_path else "Importado",
                         "created": entry.ctime.strftime("%Y-%m-%d %H:%M") if entry.ctime else "",
                         "modified": entry.mtime.strftime("%Y-%m-%d %H:%M") if entry.mtime else "",
-                        "tags": "",
+                        "tags": list(entry.tags) if entry.tags else [],
                     }
+                    # Converter tags para string
+                    if isinstance(entry_data["tags"], list):
+                        entry_data["tags"] = ", ".join(entry_data["tags"])
                     self.imported_entries.append(entry_data)
 
             # Mostrar resultado
@@ -3568,6 +3591,17 @@ class KeepsidianWindow(QMainWindow):
 
                 print(f"[DEBUG] Banco aberto! Entradas: {len(kp.entries)}")
 
+                def get_group_path(group):
+                    """Obtém o caminho completo do grupo (Pasta/Subpasta/...)"""
+                    if not group:
+                        return ""
+                    path_parts = []
+                    current = group
+                    while current and current.name and current.name != "Root":
+                        path_parts.insert(0, current.name)
+                        current = current.parentgroup
+                    return "/".join(path_parts) if path_parts else ""
+
                 # Converter entradas
                 self.entries = []
                 for entry in kp.entries:
@@ -3575,6 +3609,10 @@ class KeepsidianWindow(QMainWindow):
                         # Converter tags de lista para string
                         tags_list = entry.tags if hasattr(entry, 'tags') and entry.tags else []
                         tags_str = ", ".join(tags_list) if tags_list else ""
+
+                        # Obter caminho completo do grupo
+                        group_path = get_group_path(entry.group)
+                        print(f"[DEBUG] Entrada '{entry.title}' grupo: '{group_path}'")
 
                         entry_data = {
                             "type": "🔐 Senha",
@@ -3584,7 +3622,7 @@ class KeepsidianWindow(QMainWindow):
                             "url": entry.url or "",
                             "notes": entry.notes or "",
                             "tags": tags_str,
-                            "group": entry.group.name if entry.group else "Root",
+                            "group": group_path if group_path else "",
                             "created": entry.ctime.strftime("%Y-%m-%d %H:%M") if entry.ctime else "",
                             "modified": entry.mtime.strftime("%Y-%m-%d %H:%M") if entry.mtime else "",
                         }
